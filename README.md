@@ -5,6 +5,15 @@ This project re-implement its some features via [go](https://golang.org/)
 
 [walle-cli.go](walle-cli.go) vs [walle-cli](https://github.com/Meituan-Dianping/walle/tree/master/walle-cli)
 
+### Build ###
+```
+go build walle-cli.go
+```
+or
+```
+go install walle-cli.go
+```
+
 ### Usage of walle-cli ###
 
 It is a command line tool for processing channel apk
