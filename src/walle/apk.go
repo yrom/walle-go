@@ -120,7 +120,10 @@ func readIdValues(file string, ids ... uint32) (map[uint32][]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	eocd, offset := findEndOfCentralDirectoryRecord(f)
+	eocd, offset, err := findEndOfCentralDirectoryRecord(f)
+	if err != nil {
+		return nil, err
+	}
 	if offset <= 0 {
 		return nil, errors.New("Cannot find EOCD record, maybe a broken zip file.")
 	}
@@ -147,18 +150,24 @@ func readIdValues(file string, ids ... uint32) (map[uint32][]byte, error) {
 // For a zip with no archive comment, the
 // end-of-central-directory record will be 22 bytes long, so
 // we expect to find the EOCD marker 22 bytes from the end.
-func findEndOfCentralDirectoryRecord(f *os.File) ([]byte, int64) {
-	fi, _ := f.Stat()
+func findEndOfCentralDirectoryRecord(f *os.File) ([]byte, int64, error) {
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, -1, err
+	}
 	if fi.Size() < _ZIP_EOCD_REC_MIN_SIZE {
 		// No space for EoCD record in the file.
-		return nil, -1
+		return nil, -1, nil
 	}
 	// Optimization: 99.99% of APKs have a zero-length comment field in the EoCD record and thus
 	// the EoCD record offset is known in advance. Try that offset first to avoid unnecessarily
 	// reading more data.
-	ret, offset := findEOCDRecord(f, 0)
+	ret, offset, err := findEOCDRecord(f, 0)
+	if err != nil {
+		return nil, -1, err
+	}
 	if ret != nil && offset != -1 {
-		return ret, offset
+		return ret, offset, nil
 	}
 	// EoCD does not start where we expected it to. Perhaps it contains a non-empty comment
 	// field. Expand the search. The maximum size of the comment field in EoCD is 65535 because
@@ -166,15 +175,18 @@ func findEndOfCentralDirectoryRecord(f *os.File) ([]byte, int64) {
 	return findEOCDRecord(f, math.MaxUint16)
 }
 
-func findEOCDRecord(f *os.File, maxCommentSize uint16) ([]byte, int64) {
+func findEOCDRecord(f *os.File, maxCommentSize uint16) ([]byte, int64, error) {
 	if (maxCommentSize < 0) || maxCommentSize > math.MaxUint16 {
-		panic(os.ErrInvalid)
+		return nil, -1, os.ErrInvalid
 	}
-	fi, _ := f.Stat()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, -1, err
+	}
 	fileSize := fi.Size()
 	if fileSize < _ZIP_EOCD_REC_MIN_SIZE {
 		// No space for EoCD record in the file.
-		return nil, -1
+		return nil, -1, nil
 	}
 	// Lower maxCommentSize if the file is too small.
 	if s := uint16(fileSize - _ZIP_EOCD_REC_MIN_SIZE); maxCommentSize > s {
@@ -185,7 +197,7 @@ func findEOCDRecord(f *os.File, maxCommentSize uint16) ([]byte, int64) {
 	buf := make([]byte, maxEocdSize)
 	n, e := f.ReadAt(buf, bufOffsetInFile)
 	if e != nil {
-		panic(e)
+		return nil, -1, err
 	}
 	eocdOffsetInFile :=
 		func() int64 {
@@ -206,10 +218,10 @@ func findEOCDRecord(f *os.File, maxCommentSize uint16) ([]byte, int64) {
 		}()
 	if eocdOffsetInFile == -1 {
 		// No EoCD record found in the buffer
-		return nil, -1
+		return nil, -1, nil
 	}
 	// EoCD found
-	return buf[eocdOffsetInFile:], bufOffsetInFile + eocdOffsetInFile
+	return buf[eocdOffsetInFile:], bufOffsetInFile + eocdOffsetInFile, nil
 
 }
 
@@ -331,7 +343,6 @@ func makeSigningBlockWithChannelInfo(info ChannelInfo, signingBlock []byte) ([]b
 	if n := uint64(signingBlockLen - 8); signingBlockSize != n {
 		return nil, 0, fmt.Errorf("APK Signing Block is illegal! Expect size %d but %d", signingBlockSize, n)
 	}
-	signingValueSize := getUint64(signingBlock, 8)
 
 	channelValue := info.Bytes()
 	channelValueSize := uint64(4 + len(channelValue))
@@ -341,7 +352,8 @@ func makeSigningBlockWithChannelInfo(info ChannelInfo, signingBlock []byte) ([]b
 	position := 0
 	putUint64(resultSize-8, newBlock, position)
 	position += 8
-	n, _ := copyBytes(signingBlock, 8, newBlock, position, int(signingValueSize+8))
+	// copy raw id-value pairs
+	n, _ := copyBytes(signingBlock, 8, newBlock, position, int(signingBlockSize)-16-8)
 	position += n
 	putUint64(channelValueSize, newBlock, position)
 	position += 8
@@ -356,7 +368,14 @@ func makeSigningBlockWithChannelInfo(info ChannelInfo, signingBlock []byte) ([]b
 	position += 16
 
 	if position != int(resultSize) {
-		panic(fmt.Errorf("count mismatched ! %d vs %d", position, resultSize))
+		return nil, -1, fmt.Errorf("count mismatched ! %d vs %d", position, resultSize)
 	}
 	return newBlock, int(resultSize) - signingBlockLen, nil
+}
+
+func makeEocd(origin []byte, newCentralDirOffset uint32) []byte {
+	eocd := make([]byte, len(origin))
+	copy(eocd, origin)
+	setEocdCentralDirectoryOffset(eocd, newCentralDirOffset)
+	return eocd
 }

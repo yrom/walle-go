@@ -106,7 +106,10 @@ func newZipSections(input string) (z zipSections, err error) {
 	defer in.Close()
 
 	// read eocd
-	eocd, eocdOffset := findEndOfCentralDirectoryRecord(in)
+	eocd, eocdOffset, err := findEndOfCentralDirectoryRecord(in)
+	if err != nil {
+		return
+	}
 	centralDirOffset := getEocdCentralDirectoryOffset(eocd)
 	centralDirSize := getEocdCentralDirectorySize(eocd)
 	z.eocd = eocd
@@ -188,9 +191,6 @@ func newTransform(info ChannelInfo) transform {
 		if err != nil {
 			return nil, err
 		}
-		newEocd := make([]byte, len(zip.eocd))
-		copy(newEocd, zip.eocd)
-		setEocdCentralDirectoryOffset(newEocd, uint32(int64(diffSize)+zip.centralDirOffset))
 		newzip := new(zipSections)
 		newzip.beforeSigningBlock = zip.beforeSigningBlock
 		newzip.signingBlock = newBlock
@@ -198,7 +198,7 @@ func newTransform(info ChannelInfo) transform {
 		newzip.centraDir = zip.centraDir
 		newzip.centralDirOffset = zip.centralDirOffset
 		newzip.eocdOffset = zip.eocdOffset
-		newzip.eocd = newEocd
+		newzip.eocd = makeEocd(zip.eocd, uint32(int64(diffSize)+zip.centralDirOffset))
 		return newzip, nil
 	}
 }
